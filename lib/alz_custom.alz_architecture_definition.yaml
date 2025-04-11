@@ -1,0 +1,27 @@
+---
+name: custom
+management_groups:
+  - archetypes:
+      - root
+    display_name: ROOT
+    exists: true
+    id: 
+    parent_id: null
+  - archetypes:
+      - landing_zones
+    display_name: CUSTOMENV
+    exists: true
+    id: 
+    parent_id: 
+  - archetypes:
+      - landing_zones
+    display_name: SANDBOXENV
+    exists: true
+    id: 
+    parent_id: 
+  - archetypes:
+      - platform
+    display_name: PLATFORMENV
+    exists: true
+    id: 
+    parent_id:  

@@ -1,0 +1,161 @@
+# Template for simple terraform plan and apply
+# Apply is only triggered in main branch
+# Fill in all the variables where <insert_..>
+variables:
+  - name: terraform_version
+    value: 1.9.2
+  - name: terraform_state_container
+    value: tfstate
+  - name: terraform_state_storage_key
+    value: terraform.tfstate
+  - name: terraform_state_storage_account
+    value: policytfstateprd
+  - name: terraform_state_storage_account_resource_group
+    value: rg-policy-tf-state
+  - name: subscription_id
+    value: XXXXXXX
+  - name: service_connection_name
+    value: XXXXXXXX
+  - name: ALZLIB_LIBRARY_GIT_URL
+    value: "https://XXXXXXX"
+
+resources:
+  repositories:
+    - repository: XXXXXXX
+      type: git
+      name: XXXXXXX
+
+trigger:
+  branches:
+    include:
+      - main
+      - feature/*
+
+stages:
+  - stage: plan
+    displayName: "Terraform plan"
+    jobs:
+      - job: plan
+        displayName: "Terraform plan"
+        pool:
+          vmImage: "ubuntu-latest"
+        uses:
+          repositories:
+            - alz-library
+        steps:
+          # Set up Git authentication before fetching the repository
+        
+          # Set the environment variable for the repository URL
+          - bash: |
+              echo "##vso[task.setvariable variable=ALZLIB_LIBRARY_GIT_URL;isOutput=true]${{ variables.ALSLIB_LIBRARY_GIT_URL }}"
+            displayName: "Set ALZLIB_LIBRARY_GIT_URL environment variable"
+          
+          - task: AzureCLI@2
+            displayName: AzureCLI test connection
+            inputs:
+              azureSubscription: "${{ variables.service_connection_name }}"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az --version
+                az account set --subscription=$(subscription_id)
+          
+          - task: TerraformInstaller@1
+            displayName: install terraform
+            inputs:
+              terraformVersion: ${{ variables.terraform_version }}
+          
+          - task: TerraformTaskV4@4
+            displayName: Terraform init
+            inputs:
+              provider: "azurerm"
+              command: "init"
+              commandOptions: '-backend-config=subscription_id=$(subscription_id)'
+              workingDirectory: "$(System.DefaultWorkingDirectory)/"
+              backendServiceArm: "${{ variables.service_connection_name }}"
+              backendAzureRmResourceGroupName: "${{ variables.terraform_state_storage_account_resource_group }}"
+              backendAzureRmStorageAccountName: "${{ variables.terraform_state_storage_account }}"
+              backendAzureRmContainerName: "${{ variables.terraform_state_container }}"
+              backendAzureRmKey: "${{ variables.terraform_state_storage_key }}"
+          
+          - task: TerraformTaskV4@4
+            displayName: terraform plan
+            name: terraform_plan
+            inputs:
+              provider: "azurerm"
+              command: "plan"
+              commandOptions: >-
+                -out tf.plan
+              workingDirectory: "$(System.DefaultWorkingDirectory)/"
+              environmentServiceNameAzureRM: "${{ variables.service_connection_name }}"         
+          
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: "$(System.DefaultWorkingDirectory)/tf.plan"
+              artifact: "terraform-plan"
+              publishLocation: "pipeline"
+
+  - stage: apply
+    displayName: "Terraform apply"
+    dependsOn: plan
+    condition: |
+      and(
+        succeeded(),
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        ne(stageDependencies.plan.outputs['terraform_plan.changesPresent'], '0')
+      )
+    jobs:
+      - job: approval
+        displayName: Wait for approval
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            timeoutInMinutes: 1440
+            inputs:
+              instructions: Run terraform apply?
+      - job: apply
+        dependsOn: approval
+        pool:
+          vmImage: "ubuntu-latest"
+        displayName: Terraform apply
+        uses:
+          repositories:
+            - alz-library
+        steps:
+          # Set up Git authentication before fetching the repository
+
+          # Set the environment variable for the repository URL again
+          - bash: |
+              echo "##vso[task.setvariable variable=ALZLIB_LIBRARY_GIT_URL;isOutput=true]${{ variables.ALSLIB_LIBRARY_GIT_URL }}"
+            displayName: "Set ALZLIB_LIBRARY_GIT_URL environment variable"
+          
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: "current"
+              artifactName: "terraform-plan"
+              targetPath: "$(System.DefaultWorkingDirectory)"
+          
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: ${{ variables.terraform_version }}
+          
+          - task: TerraformTaskV4@4
+            displayName: Terraform init
+            inputs:
+              provider: "azurerm"
+              command: "init"
+              workingDirectory: "$(System.DefaultWorkingDirectory)"
+              backendServiceArm: "${{ variables.service_connection_name }}"
+              backendAzureRmResourceGroupName: "${{ variables.terraform_state_storage_account_resource_group }}"
+              backendAzureRmStorageAccountName: "${{ variables.terraform_state_storage_account }}"
+              backendAzureRmContainerName: "${{ variables.terraform_state_container }}"
+              backendAzureRmKey: "${{ variables.terraform_state_storage_key }}"
+          
+          - task: TerraformTaskV4@4
+            displayName: Terraform apply
+            inputs:
+              provider: "azurerm"
+              command: "apply"
+              workingDirectory: "$(System.DefaultWorkingDirectory)"
+              commandOptions: "tf.plan"
+              environmentServiceNameAzureRM: "${{ variables.service_connection_name }}"
